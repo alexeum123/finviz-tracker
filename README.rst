@@ -155,16 +155,6 @@ Documentation
 
 You can read the rest of the documentation inside the docstrings.
 
-Contributing 
-=============
-You can contribute to the project by reporting bugs, suggesting enhancements, or directly by extending and writing features (see the ongoing projects_).
-
-.. _projects: https://github.com/mariostoev/finviz/projects/1
-
-*You can also buy me a coffee!*
-
-.. image:: https://user-images.githubusercontent.com/8982949/33011169-6da4af5e-cddd-11e7-94e5-a52d776b94ba.png
-        :target: https://www.paypal.me/finvizapi
 
 Disclaimer
 -----------
