@@ -1,0 +1,1929 @@
+# Complete Technical Specification for Free Cluely: TypeScript Web Application with Amazon Bedrock
+
+## Project Overview and Purpose
+
+Create a lightweight, TypeScript-based web application called "Free Cluely" - an AI-powered screenshot analyzer designed to assist users during coding interviews, online assessments, and general problem-solving scenarios. This application functions as a browser-based overlay that can capture screenshots, analyze content using Amazon Bedrock's Claude AI models, and provide intelligent solutions through a clean, responsive interface.
+
+The application is built using pure TypeScript with minimal external dependencies, designed to work seamlessly within Amazon's internal build system and comply with corporate security requirements. The core concept revolves around creating a web-based overlay that can be quickly deployed, used to capture and analyze screen content, and integrated into existing workflows.
+
+## Core Architecture and Technology Stack
+
+### Primary Technologies
+- **TypeScript**: Type-safe JavaScript for all application logic
+- **Vanilla JavaScript/DOM**: Direct DOM manipulation without frameworks
+- **CSS3**: Modern styling with CSS Grid and Flexbox
+- **Web APIs**: Native browser APIs for screenshot capture and storage
+- **Amazon Bedrock**: Claude AI models for content analysis
+- **AWS SDK for JavaScript**: Lightweight SDK for Bedrock integration
+
+### Minimal Dependencies
+- **@aws-sdk/client-bedrock-runtime**: Amazon Bedrock client (official AWS SDK)
+- **@aws-sdk/credential-providers**: AWS credential management
+- **TypeScript**: Development-time type checking
+- **Webpack/Vite**: Build tooling (optional, can use native ES modules)
+
+### Key Design Principles
+- **Zero Framework Dependencies**: No React, Vue, or Angular
+- **Minimal External Libraries**: Only essential AWS SDK components
+- **Corporate-Friendly**: Designed for internal Amazon use
+- **Security-First**: Follows AWS security best practices
+- **Build System Compatible**: Works with Amazon's internal build tools
+
+## Detailed File Structure and Organization
+
+```
+free-cluely-web/
+├── package.json                    # Minimal package configuration
+├── tsconfig.json                   # TypeScript configuration
+├── webpack.config.js               # Build configuration (optional)
+├── index.html                      # Main HTML entry point
+├── README.md                       # Project documentation
+├── 
+├── src/
+│   ├── main.ts                     # Application entry point
+│   ├── config.ts                   # Configuration management
+│   ├── types.ts                    # TypeScript type definitions
+│   │
+│   ├── core/                       # Core application logic
+│   │   ├── AppState.ts             # Application state management
+│   │   ├── EventBus.ts             # Event system for component communication
+│   │   ├── Logger.ts               # Logging utilities
+│   │   └── ErrorHandler.ts         # Error handling and recovery
+│   │
+│   ├── services/                   # Business logic services
+│   │   ├── ScreenshotService.ts    # Screenshot capture using Web APIs
+│   │   ├── BedrockService.ts       # Amazon Bedrock integration
+│   │   ├── StorageService.ts       # Local storage management
+│   │   └── AuthService.ts          # AWS authentication
+│   │
+│   ├── ui/                         # User interface components
+│   │   ├── OverlayManager.ts       # Main overlay management
+│   │   ├── ScreenshotQueue.ts      # Screenshot queue interface
+│   │   ├── SolutionDisplay.ts      # AI solution display
+│   │   ├── StatusBar.ts            # Status and notifications
+│   │   └── KeyboardManager.ts      # Keyboard shortcuts
+│   │
+│   ├── utils/                      # Utility functions
+│   │   ├── ImageProcessor.ts       # Image processing utilities
+│   │   ├── PromptEngine.ts         # AI prompt management
+│   │   ├── Validator.ts            # Input validation
+│   │   └── Crypto.ts               # Cryptographic utilities
+│   │
+│   └── styles/                     # CSS styling
+│       ├── main.css                # Main application styles
+│       ├── overlay.css             # Overlay-specific styles
+│       ├── components.css          # Component styles
+│       └── responsive.css          # Responsive design
+│
+├── dist/                           # Build output
+└── docs/                           # Documentation
+    ├── API.md                      # API documentation
+    ├── DEPLOYMENT.md               # Deployment guide
+    └── SECURITY.md                 # Security considerations
+```
+
+## Core Application Architecture
+
+### 1. Application Entry Point (main.ts)
+
+The main entry point initializes the application and sets up the core systems:
+
+```typescript
+import { AppState } from './core/AppState';
+import { OverlayManager } from './ui/OverlayManager';
+import { KeyboardManager } from './ui/KeyboardManager';
+import { BedrockService } from './services/BedrockService';
+import { ScreenshotService } from './services/ScreenshotService';
+import { Logger } from './core/Logger';
+import { CONFIG } from './config';
+
+class FreeCluely {
+    private appState: AppState;
+    private overlayManager: OverlayManager;
+    private keyboardManager: KeyboardManager;
+    private bedrockService: BedrockService;
+    private screenshotService: ScreenshotService;
+
+    constructor() {
+        this.appState = new AppState();
+        this.bedrockService = new BedrockService();
+        this.screenshotService = new ScreenshotService();
+        this.overlayManager = new OverlayManager(this.appState);
+        this.keyboardManager = new KeyboardManager(this.appState);
+    }
+
+    public async initialize(): Promise<void> {
+        try {
+            Logger.info('Initializing Free Cluely application...');
+            
+            // Initialize services
+            await this.bedrockService.initialize();
+            await this.screenshotService.initialize();
+            
+            // Setup UI
+            await this.overlayManager.initialize();
+            this.keyboardManager.initialize();
+            
+            // Register event handlers
+            this.registerEventHandlers();
+            
+            Logger.info('Application initialized successfully');
+        } catch (error) {
+            Logger.error('Failed to initialize application:', error);
+            throw error;
+        }
+    }
+
+    private registerEventHandlers(): void {
+        this.appState.on('screenshot-captured', this.handleScreenshotCaptured.bind(this));
+        this.appState.on('analysis-requested', this.handleAnalysisRequested.bind(this));
+        this.appState.on('solution-generated', this.handleSolutionGenerated.bind(this));
+    }
+
+    private async handleScreenshotCaptured(screenshot: Screenshot): Promise<void> {
+        this.overlayManager.addScreenshotToQueue(screenshot);
+    }
+
+    private async handleAnalysisRequested(screenshots: Screenshot[]): Promise<void> {
+        try {
+            const analysis = await this.bedrockService.analyzeScreenshots(screenshots);
+            this.appState.emit('solution-generated', analysis);
+        } catch (error) {
+            Logger.error('Analysis failed:', error);
+            this.appState.emit('analysis-error', error);
+        }
+    }
+
+    private handleSolutionGenerated(solution: Solution): void {
+        this.overlayManager.displaySolution(solution);
+    }
+}
+
+// Initialize application when DOM is ready
+document.addEventListener('DOMContentLoaded', async () => {
+    const app = new FreeCluely();
+    await app.initialize();
+});
+```
+
+### 2. Application State Management (AppState.ts)
+
+A lightweight state management system using TypeScript:
+
+```typescript
+import { EventBus } from './EventBus';
+import { Screenshot, Solution, AppView } from '../types';
+
+export class AppState extends EventBus {
+    private _currentView: AppView = 'queue';
+    private _screenshots: Screenshot[] = [];
+    private _currentSolution: Solution | null = null;
+    private _isProcessing: boolean = false;
+    private _isVisible: boolean = false;
+
+    // Getters
+    public get currentView(): AppView {
+        return this._currentView;
+    }
+
+    public get screenshots(): Screenshot[] {
+        return [...this._screenshots];
+    }
+
+    public get currentSolution(): Solution | null {
+        return this._currentSolution;
+    }
+
+    public get isProcessing(): boolean {
+        return this._isProcessing;
+    }
+
+    public get isVisible(): boolean {
+        return this._isVisible;
+    }
+
+    // State mutations
+    public setView(view: AppView): void {
+        if (this._currentView !== view) {
+            this._currentView = view;
+            this.emit('view-changed', view);
+        }
+    }
+
+    public addScreenshot(screenshot: Screenshot): void {
+        this._screenshots.unshift(screenshot);
+        
+        // Limit to 10 screenshots
+        if (this._screenshots.length > 10) {
+            this._screenshots = this._screenshots.slice(0, 10);
+        }
+        
+        this.emit('screenshots-updated', this._screenshots);
+    }
+
+    public removeScreenshot(id: string): void {
+        this._screenshots = this._screenshots.filter(s => s.id !== id);
+        this.emit('screenshots-updated', this._screenshots);
+    }
+
+    public clearScreenshots(): void {
+        this._screenshots = [];
+        this.emit('screenshots-updated', this._screenshots);
+    }
+
+    public setSolution(solution: Solution): void {
+        this._currentSolution = solution;
+        this.emit('solution-updated', solution);
+    }
+
+    public setProcessing(processing: boolean): void {
+        if (this._isProcessing !== processing) {
+            this._isProcessing = processing;
+            this.emit('processing-changed', processing);
+        }
+    }
+
+    public toggleVisibility(): void {
+        this._isVisible = !this._isVisible;
+        this.emit('visibility-changed', this._isVisible);
+    }
+}
+```
+
+### 3. Amazon Bedrock Integration (BedrockService.ts)
+
+Direct integration with Amazon Bedrock using the official AWS SDK:
+
+```typescript
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { fromCognitoIdentityPool } from '@aws-sdk/credential-providers';
+import { Screenshot, Solution } from '../types';
+import { PromptEngine } from '../utils/PromptEngine';
+import { Logger } from '../core/Logger';
+import { CONFIG } from '../config';
+
+export class BedrockService {
+    private client: BedrockRuntimeClient;
+    private promptEngine: PromptEngine;
+
+    constructor() {
+        this.promptEngine = new PromptEngine();
+    }
+
+    public async initialize(): Promise<void> {
+        try {
+            // Initialize Bedrock client with AWS credentials
+            this.client = new BedrockRuntimeClient({
+                region: CONFIG.AWS_REGION,
+                credentials: fromCognitoIdentityPool({
+                    identityPoolId: CONFIG.COGNITO_IDENTITY_POOL_ID,
+                    clientConfig: { region: CONFIG.AWS_REGION }
+                })
+            });
+
+            Logger.info('Bedrock service initialized successfully');
+        } catch (error) {
+            Logger.error('Failed to initialize Bedrock service:', error);
+            throw error;
+        }
+    }
+
+    public async analyzeScreenshots(screenshots: Screenshot[]): Promise<Solution> {
+        if (screenshots.length === 0) {
+            throw new Error('No screenshots provided for analysis');
+        }
+
+        try {
+            Logger.info(`Analyzing ${screenshots.length} screenshot(s)...`);
+
+            // Use the most recent screenshot for analysis
+            const primaryScreenshot = screenshots[0];
+            const prompt = this.promptEngine.generateAnalysisPrompt();
+
+            const requestBody = {
+                anthropic_version: "bedrock-2023-05-31",
+                max_tokens: 4000,
+                system: prompt.system,
+                messages: [{
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: prompt.user
+                        },
+                        {
+                            type: "image",
+                            source: {
+                                type: "base64",
+                                media_type: "image/jpeg",
+                                data: primaryScreenshot.data
+                            }
+                        }
+                    ]
+                }]
+            };
+
+            const command = new InvokeModelCommand({
+                modelId: CONFIG.BEDROCK_MODEL_ID,
+                contentType: "application/json",
+                body: JSON.stringify(requestBody)
+            });
+
+            const response = await this.client.send(command);
+            const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+
+            if (!responseBody.content || !responseBody.content[0] || !responseBody.content[0].text) {
+                throw new Error('Invalid response format from Bedrock');
+            }
+
+            const solution: Solution = {
+                id: this.generateId(),
+                content: responseBody.content[0].text,
+                timestamp: Date.now(),
+                screenshotIds: screenshots.map(s => s.id),
+                model: CONFIG.BEDROCK_MODEL_ID
+            };
+
+            Logger.info('Analysis completed successfully');
+            return solution;
+
+        } catch (error) {
+            Logger.error('Analysis failed:', error);
+            throw error;
+        }
+    }
+
+    public async analyzeSingleImage(imageData: string): Promise<string> {
+        try {
+            const prompt = this.promptEngine.generateImageAnalysisPrompt();
+
+            const requestBody = {
+                anthropic_version: "bedrock-2023-05-31",
+                max_tokens: 2000,
+                system: prompt.system,
+                messages: [{
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: prompt.user
+                        },
+                        {
+                            type: "image",
+                            source: {
+                                type: "base64",
+                                media_type: "image/jpeg",
+                                data: imageData
+                            }
+                        }
+                    ]
+                }]
+            };
+
+            const command = new InvokeModelCommand({
+                modelId: CONFIG.BEDROCK_MODEL_ID,
+                contentType: "application/json",
+                body: JSON.stringify(requestBody)
+            });
+
+            const response = await this.client.send(command);
+            const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+
+            return responseBody.content[0].text;
+
+        } catch (error) {
+            Logger.error('Single image analysis failed:', error);
+            throw error;
+        }
+    }
+
+    private generateId(): string {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+}
+```
+
+### 4. Screenshot Capture Service (ScreenshotService.ts)
+
+Using native Web APIs for screenshot capture:
+
+```typescript
+import { Screenshot } from '../types';
+import { ImageProcessor } from '../utils/ImageProcessor';
+import { Logger } from '../core/Logger';
+
+export class ScreenshotService {
+    private mediaStream: MediaStream | null = null;
+
+    public async initialize(): Promise<void> {
+        // Check if screen capture is supported
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+            throw new Error('Screen capture not supported in this browser');
+        }
+
+        Logger.info('Screenshot service initialized');
+    }
+
+    public async captureScreen(): Promise<Screenshot> {
+        try {
+            Logger.info('Starting screen capture...');
+
+            // Request screen capture permission
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    mediaSource: 'screen' as any,
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                },
+                audio: false
+            });
+
+            // Create video element to capture frame
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.style.display = 'none';
+            document.body.appendChild(video);
+
+            return new Promise((resolve, reject) => {
+                video.onloadedmetadata = () => {
+                    video.play();
+                    
+                    // Create canvas to capture frame
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        reject(new Error('Failed to get canvas context'));
+                        return;
+                    }
+
+                    ctx.drawImage(video, 0, 0);
+                    
+                    // Convert to blob
+                    canvas.toBlob(async (blob) => {
+                        // Stop stream and cleanup
+                        stream.getTracks().forEach(track => track.stop());
+                        document.body.removeChild(video);
+                        
+                        if (!blob) {
+                            reject(new Error('Failed to create image blob'));
+                            return;
+                        }
+
+                        try {
+                            // Process image
+                            const processedData = await ImageProcessor.processBlob(blob);
+                            
+                            const screenshot: Screenshot = {
+                                id: this.generateId(),
+                                timestamp: Date.now(),
+                                data: processedData.base64,
+                                preview: processedData.preview,
+                                size: processedData.size,
+                                dimensions: {
+                                    width: canvas.width,
+                                    height: canvas.height
+                                }
+                            };
+
+                            Logger.info('Screenshot captured successfully');
+                            resolve(screenshot);
+
+                        } catch (error) {
+                            reject(error);
+                        }
+                    }, 'image/jpeg', 0.8);
+                };
+                
+                video.onerror = reject;
+            });
+
+        } catch (error) {
+            Logger.error('Screen capture failed:', error);
+            throw error;
+        }
+    }
+
+    private generateId(): string {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+}
+```
+
+### 5. Overlay Manager (OverlayManager.ts)
+
+Pure TypeScript DOM manipulation for the overlay interface:
+
+```typescript
+import { AppState } from '../core/AppState';
+import { Screenshot, Solution } from '../types';
+import { Logger } from '../core/Logger';
+
+export class OverlayManager {
+    private appState: AppState;
+    private overlayElement: HTMLElement | null = null;
+    private isDragging: boolean = false;
+    private dragOffset: { x: number; y: number } = { x: 0, y: 0 };
+
+    constructor(appState: AppState) {
+        this.appState = appState;
+    }
+
+    public async initialize(): Promise<void> {
+        this.createOverlay();
+        this.setupEventListeners();
+        this.setupStateListeners();
+        
+        Logger.info('Overlay manager initialized');
+    }
+
+    private createOverlay(): void {
+        this.overlayElement = document.createElement('div');
+        this.overlayElement.id = 'free-cluely-overlay';
+        this.overlayElement.className = 'fc-overlay';
+        
+        this.overlayElement.innerHTML = `
+            <div class="fc-header">
+                <div class="fc-title">Free Cluely</div>
+                <div class="fc-controls">
+                    <button class="fc-btn fc-btn-small" id="fc-minimize-btn">−</button>
+                    <button class="fc-btn fc-btn-small" id="fc-close-btn">×</button>
+                </div>
+            </div>
+            <div class="fc-content">
+                <div class="fc-tabs">
+                    <button class="fc-tab fc-tab-active" data-view="queue">Queue</button>
+                    <button class="fc-tab" data-view="solutions">Solutions</button>
+                </div>
+                <div class="fc-views">
+                    <div class="fc-view fc-view-active" id="fc-queue-view">
+                        <div class="fc-queue-header">
+                            <button class="fc-btn fc-btn-primary" id="fc-capture-btn">📷 Capture Screen</button>
+                            <button class="fc-btn fc-btn-secondary" id="fc-clear-btn">🗑️ Clear All</button>
+                        </div>
+                        <div class="fc-screenshots" id="fc-screenshots-container"></div>
+                    </div>
+                    <div class="fc-view" id="fc-solutions-view">
+                        <div class="fc-solutions-header">
+                            <button class="fc-btn fc-btn-primary" id="fc-analyze-btn">🤖 Analyze Screenshots</button>
+                            <button class="fc-btn fc-btn-secondary" id="fc-back-btn">← Back to Queue</button>
+                        </div>
+                        <div class="fc-solution-content" id="fc-solution-content">
+                            <div class="fc-placeholder">Take screenshots and click "Analyze" to get AI-powered solutions</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="fc-status" id="fc-status">Ready</div>
+        `;
+
+        document.body.appendChild(this.overlayElement);
+        
+        // Initially hidden
+        this.overlayElement.style.display = 'none';
+    }
+
+    private setupEventListeners(): void {
+        if (!this.overlayElement) return;
+
+        // Tab switching
+        this.overlayElement.querySelectorAll('.fc-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                const target = e.target as HTMLElement;
+                const view = target.dataset.view as 'queue' | 'solutions';
+                this.appState.setView(view);
+            });
+        });
+
+        // Button events
+        const captureBtn = this.overlayElement.querySelector('#fc-capture-btn');
+        captureBtn?.addEventListener('click', () => {
+            this.appState.emit('capture-screenshot');
+        });
+
+        const clearBtn = this.overlayElement.querySelector('#fc-clear-btn');
+        clearBtn?.addEventListener('click', () => {
+            this.appState.clearScreenshots();
+        });
+
+        const analyzeBtn = this.overlayElement.querySelector('#fc-analyze-btn');
+        analyzeBtn?.addEventListener('click', () => {
+            this.appState.emit('analysis-requested', this.appState.screenshots);
+        });
+
+        const backBtn = this.overlayElement.querySelector('#fc-back-btn');
+        backBtn?.addEventListener('click', () => {
+            this.appState.setView('queue');
+        });
+
+        const closeBtn = this.overlayElement.querySelector('#fc-close-btn');
+        closeBtn?.addEventListener('click', () => {
+            this.appState.toggleVisibility();
+        });
+
+        // Dragging functionality
+        const header = this.overlayElement.querySelector('.fc-header');
+        header?.addEventListener('mousedown', this.startDrag.bind(this));
+        document.addEventListener('mousemove', this.drag.bind(this));
+        document.addEventListener('mouseup', this.endDrag.bind(this));
+    }
+
+    private setupStateListeners(): void {
+        this.appState.on('view-changed', this.handleViewChanged.bind(this));
+        this.appState.on('screenshots-updated', this.handleScreenshotsUpdated.bind(this));
+        this.appState.on('solution-updated', this.handleSolutionUpdated.bind(this));
+        this.appState.on('processing-changed', this.handleProcessingChanged.bind(this));
+        this.appState.on('visibility-changed', this.handleVisibilityChanged.bind(this));
+    }
+
+    private handleViewChanged(view: 'queue' | 'solutions'): void {
+        if (!this.overlayElement) return;
+
+        // Update tabs
+        this.overlayElement.querySelectorAll('.fc-tab').forEach(tab => {
+            tab.classList.remove('fc-tab-active');
+        });
+        
+        const activeTab = this.overlayElement.querySelector(`[data-view="${view}"]`);
+        activeTab?.classList.add('fc-tab-active');
+
+        // Update views
+        this.overlayElement.querySelectorAll('.fc-view').forEach(viewEl => {
+            viewEl.classList.remove('fc-view-active');
+        });
+        
+        const activeView = this.overlayElement.querySelector(`#fc-${view}-view`);
+        activeView?.classList.add('fc-view-active');
+    }
+
+    private handleScreenshotsUpdated(screenshots: Screenshot[]): void {
+        const container = this.overlayElement?.querySelector('#fc-screenshots-container');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        if (screenshots.length === 0) {
+            container.innerHTML = '<div class="fc-placeholder">No screenshots yet. Click "Capture Screen" to get started!</div>';
+            return;
+        }
+
+        screenshots.forEach(screenshot => {
+            const item = this.createScreenshotItem(screenshot);
+            container.appendChild(item);
+        });
+    }
+
+    private createScreenshotItem(screenshot: Screenshot): HTMLElement {
+        const item = document.createElement('div');
+        item.className = 'fc-screenshot-item';
+        
+        const time = new Date(screenshot.timestamp).toLocaleTimeString();
+        
+        item.innerHTML = `
+            <img src="${screenshot.preview}" alt="Screenshot" class="fc-screenshot-preview">
+            <div class="fc-screenshot-info">
+                <div class="fc-screenshot-time">${time}</div>
+                <button class="fc-btn fc-btn-danger fc-btn-small" data-screenshot-id="${screenshot.id}">Delete</button>
+            </div>
+        `;
+
+        // Add delete functionality
+        const deleteBtn = item.querySelector('[data-screenshot-id]');
+        deleteBtn?.addEventListener('click', () => {
+            this.appState.removeScreenshot(screenshot.id);
+        });
+
+        return item;
+    }
+
+    private handleSolutionUpdated(solution: Solution): void {
+        const container = this.overlayElement?.querySelector('#fc-solution-content');
+        if (!container) return;
+
+        container.innerHTML = '';
+        
+        const solutionDisplay = document.createElement('div');
+        solutionDisplay.className = 'fc-solution-display';
+        
+        // Format solution with basic markdown-like rendering
+        const formattedContent = this.formatSolutionContent(solution.content);
+        solutionDisplay.innerHTML = `<div class="fc-solution-text">${formattedContent}</div>`;
+        
+        container.appendChild(solutionDisplay);
+    }
+
+    private formatSolutionContent(content: string): string {
+        return content
+            .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="fc-code-block"><code>$2</code></pre>')
+            .replace(/`([^`]+)`/g, '<code class="fc-inline-code">$1</code>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/\n\n/g, '</p><p>')
+            .replace(/\n/g, '<br>');
+    }
+
+    private handleProcessingChanged(processing: boolean): void {
+        const statusEl = this.overlayElement?.querySelector('#fc-status');
+        if (!statusEl) return;
+
+        if (processing) {
+            statusEl.textContent = 'Analyzing screenshots...';
+            statusEl.className = 'fc-status fc-processing';
+        } else {
+            statusEl.textContent = 'Ready';
+            statusEl.className = 'fc-status';
+        }
+    }
+
+    private handleVisibilityChanged(visible: boolean): void {
+        if (!this.overlayElement) return;
+
+        if (visible) {
+            this.overlayElement.style.display = 'block';
+            this.overlayElement.classList.add('fc-visible');
+        } else {
+            this.overlayElement.classList.remove('fc-visible');
+            setTimeout(() => {
+                if (this.overlayElement) {
+                    this.overlayElement.style.display = 'none';
+                }
+            }, 300);
+        }
+    }
+
+    // Dragging functionality
+    private startDrag(e: MouseEvent): void {
+        this.isDragging = true;
+        
+        if (this.overlayElement) {
+            const rect = this.overlayElement.getBoundingClientRect();
+            this.dragOffset = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        }
+        
+        document.body.style.userSelect = 'none';
+    }
+
+    private drag(e: MouseEvent): void {
+        if (!this.isDragging || !this.overlayElement) return;
+        
+        const x = e.clientX - this.dragOffset.x;
+        const y = e.clientY - this.dragOffset.y;
+        
+        // Keep overlay within viewport
+        const maxX = window.innerWidth - this.overlayElement.offsetWidth;
+        const maxY = window.innerHeight - this.overlayElement.offsetHeight;
+        
+        const boundedX = Math.max(0, Math.min(x, maxX));
+        const boundedY = Math.max(0, Math.min(y, maxY));
+        
+        this.overlayElement.style.left = boundedX + 'px';
+        this.overlayElement.style.top = boundedY + 'px';
+    }
+
+    private endDrag(): void {
+        this.isDragging = false;
+        document.body.style.userSelect = '';
+    }
+
+    public addScreenshotToQueue(screenshot: Screenshot): void {
+        this.appState.addScreenshot(screenshot);
+    }
+
+    public displaySolution(solution: Solution): void {
+        this.appState.setSolution(solution);
+        this.appState.setView('solutions');
+    }
+}
+```
+
+### 6. Configuration Management (config.ts)
+
+Centralized configuration for Amazon internal use:
+
+```typescript
+export interface AppConfig {
+    AWS_REGION: string;
+    COGNITO_IDENTITY_POOL_ID: string;
+    BEDROCK_MODEL_ID: string;
+    MAX_SCREENSHOTS: number;
+    SCREENSHOT_QUALITY: number;
+    ANALYSIS_TIMEOUT: number;
+    LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
+}
+
+export const CONFIG: AppConfig = {
+    // AWS Configuration
+    AWS_REGION: process.env.AWS_REGION || 'us-east-1',
+    COGNITO_IDENTITY_POOL_ID: process.env.COGNITO_IDENTITY_POOL_ID || '',
+    BEDROCK_MODEL_ID: process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    
+    // Application Configuration
+    MAX_SCREENSHOTS: parseInt(process.env.MAX_SCREENSHOTS || '10'),
+    SCREENSHOT_QUALITY: parseFloat(process.env.SCREENSHOT_QUALITY || '0.8'),
+    ANALYSIS_TIMEOUT: parseInt(process.env.ANALYSIS_TIMEOUT || '30000'),
+    LOG_LEVEL: (process.env.LOG_LEVEL as any) || 'info'
+};
+
+// Validation
+export function validateConfig(): void {
+    const required = ['COGNITO_IDENTITY_POOL_ID'];
+    
+    for (const key of required) {
+        if (!CONFIG[key as keyof AppConfig]) {
+            throw new Error(`Missing required configuration: ${key}`);
+        }
+    }
+}
+```
+
+### 7. Type Definitions (types.ts)
+
+Complete TypeScript type definitions:
+
+```typescript
+export interface Screenshot {
+    id: string;
+    timestamp: number;
+    data: string; // base64 encoded image
+    preview: string; // data URL for preview
+    size: number;
+    dimensions: {
+        width: number;
+        height: number;
+    };
+}
+
+export interface Solution {
+    id: string;
+    content: string;
+    timestamp: number;
+    screenshotIds: string[];
+    model: string;
+}
+
+export type AppView = 'queue' | 'solutions';
+
+export interface ProcessedImage {
+    base64: string;
+    preview: string;
+    size: number;
+}
+
+export interface AnalysisPrompt {
+    system: string;
+    user: string;
+}
+
+export interface LogEntry {
+    timestamp: number;
+    level: 'debug' | 'info' | 'warn' | 'error';
+    message: string;
+    data?: any;
+}
+
+export interface EventCallback {
+    (data?: any): void;
+}
+
+export interface EventMap {
+    [event: string]: EventCallback[];
+}
+```
+
+### 8. Utility Classes
+
+**Event Bus (EventBus.ts):**
+```typescript
+import { EventCallback, EventMap } from '../types';
+
+export class EventBus {
+    private events: EventMap = {};
+
+    public on(event: string, callback: EventCallback): void {
+        if (!this.events[event]) {
+            this.events[event] = [];
+        }
+        this.events[event].push(callback);
+    }
+
+    public off(event: string, callback: EventCallback): void {
+        if (!this.events[event]) return;
+        
+        this.events[event] = this.events[event].filter(cb => cb !== callback);
+    }
+
+    public emit(event: string, data?: any): void {
+        if (!this.events[event]) return;
+        
+        this.events[event].forEach(callback => {
+            try {
+                callback(data);
+            } catch (error) {
+                console.error(`Error in event handler for ${event}:`, error);
+            }
+        });
+    }
+}
+```
+
+**Image Processor (ImageProcessor.ts):**
+```typescript
+import { ProcessedImage } from '../types';
+
+export class ImageProcessor {
+    public static async processBlob(blob: Blob): Promise<ProcessedImage> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            
+            reader.onload = () => {
+                const dataUrl = reader.result as string;
+                const base64 = dataUrl.split(',')[1];
+                
+                resolve({
+                    base64,
+                    preview: dataUrl,
+                    size: blob.size
+                });
+            };
+            
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    public static async resizeImage(
+        imageData: string, 
+        maxWidth: number, 
+        maxHeight: number, 
+        quality: number = 0.8
+    ): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                if (!ctx) {
+                    reject(new Error('Failed to get canvas context'));
+                    return;
+                }
+
+                // Calculate new dimensions
+                const { width, height } = this.calculateDimensions(
+                    img.width, 
+                    img.height, 
+                    maxWidth, 
+                    maxHeight
+                );
+
+                canvas.width = width;
+                canvas.height = height;
+
+                // Draw and compress
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                canvas.toBlob((blob) => {
+                    if (!blob) {
+                        reject(new Error('Failed to create blob'));
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const result = reader.result as string;
+                        resolve(result.split(',')[1]);
+                    };
+                    reader.readAsDataURL(blob);
+                }, 'image/jpeg', quality);
+            };
+            
+            img.onerror = reject;
+            img.src = `data:image/jpeg;base64,${imageData}`;
+        });
+    }
+
+    private static calculateDimensions(
+        originalWidth: number, 
+        originalHeight: number, 
+        maxWidth: number, 
+        maxHeight: number
+    ): { width: number; height: number } {
+        let { width, height } = { width: originalWidth, height: originalHeight };
+
+        if (width > maxWidth) {
+            height = (height * maxWidth) / width;
+            width = maxWidth;
+        }
+
+        if (height > maxHeight) {
+            width = (width * maxHeight) / height;
+            height = maxHeight;
+        }
+
+        return { width: Math.round(width), height: Math.round(height) };
+    }
+}
+```
+
+**Prompt Engine (PromptEngine.ts):**
+```typescript
+import { AnalysisPrompt } from '../types';
+
+export class PromptEngine {
+    public generateAnalysisPrompt(): AnalysisPrompt {
+        return {
+            system: `You are an expert software engineer and competitive programmer with extensive experience in coding interviews and technical problem-solving. 
+
+Your role is to analyze screenshots and provide comprehensive, actionable solutions. You excel at:
+- Identifying coding problems and their requirements
+- Debugging code issues and errors
+- Explaining complex technical concepts
+- Providing optimized solutions with complexity analysis
+- Suggesting best practices and improvements
+
+Always provide clear, well-structured responses with proper code formatting and detailed explanations.`,
+
+            user: `Please analyze this screenshot and provide a comprehensive solution. 
+
+If you see a coding problem:
+1. Extract and clearly state the problem
+2. Identify input/output format and constraints
+3. Provide a complete, working solution
+4. Explain the approach and algorithm
+5. Include time/space complexity analysis
+6. Suggest optimizations if applicable
+
+If you see code with errors:
+1. Identify all bugs and issues
+2. Explain why each issue is problematic
+3. Provide corrected code
+4. Suggest improvements and best practices
+
+If you see technical documentation or diagrams:
+1. Summarize the key concepts
+2. Explain complex parts in simple terms
+3. Provide practical examples
+4. Suggest next steps or related topics
+
+Format your response with clear sections, proper code blocks, and detailed explanations. Be thorough but concise.`
+        };
+    }
+
+    public generateImageAnalysisPrompt(): AnalysisPrompt {
+        return {
+            system: `You are a technical analyst specializing in interpreting visual content related to software development, coding, and technical documentation.`,
+
+            user: `Analyze this image and provide a concise but comprehensive description of what you see. Focus on:
+- Technical content (code, diagrams, interfaces)
+- Problem statements or requirements
+- Error messages or issues
+- Any actionable information
+
+Provide a clear, structured response that highlights the most important elements.`
+        };
+    }
+
+    public generateDebugPrompt(context: string): AnalysisPrompt {
+        return {
+            system: `You are a debugging expert with deep knowledge of common programming errors and their solutions.`,
+
+            user: `Given this context: ${context}
+
+Please analyze the screenshot for debugging information and provide:
+1. Identification of the specific issue
+2. Root cause analysis
+3. Step-by-step solution
+4. Prevention strategies
+5. Related best practices
+
+Be specific and actionable in your recommendations.`
+        };
+    }
+}
+```
+
+## Build Configuration and Deployment
+
+### 1. Package.json (Minimal Dependencies)
+
+```json
+{
+  "name": "free-cluely-web",
+  "version": "1.0.0",
+  "description": "AI-powered screenshot analyzer for Amazon internal use",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc && webpack --mode production",
+    "dev": "webpack serve --mode development",
+    "test": "jest",
+    "lint": "eslint src --ext .ts",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.682.0",
+    "@aws-sdk/credential-providers": "^3.682.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "webpack": "^5.0.0",
+    "webpack-cli": "^5.0.0",
+    "webpack-dev-server": "^4.0.0",
+    "ts-loader": "^9.0.0",
+    "css-loader": "^6.0.0",
+    "style-loader": "^3.0.0",
+    "html-webpack-plugin": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "eslint": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0"
+  }
+}
+```
+
+### 2. TypeScript Configuration
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "sourceMap": true,
+    "removeComments": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}
+```
+
+### 3. Webpack Configuration
+
+```javascript
+const path = require('path');
+const HtmlWebpackPlugin = require('html-webpack-plugin');
+
+module.exports = {
+  entry: './src/main.ts',
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'bundle.js',
+    clean: true
+  },
+  resolve: {
+    extensions: ['.ts', '.js']
+  },
+  module: {
+    rules: [
+      {
+        test: /\.ts$/,
+        use: 'ts-loader',
+        exclude: /node_modules/
+      },
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader']
+      }
+    ]
+  },
+  plugins: [
+    new HtmlWebpackPlugin({
+      template: './index.html'
+    })
+  ],
+  devServer: {
+    static: './dist',
+    port: 3000,
+    open: true
+  }
+};
+```
+
+### 4. CSS Styling (main.css)
+
+```css
+/* Reset and base styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #333;
+}
+
+/* Overlay styles */
+.fc-overlay {
+    position: fixed;
+    top: 50px;
+    right: 50px;
+    width: 400px;
+    max-height: 600px;
+    background: #ffffff;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    z-index: 999999;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: all 0.3s ease;
+}
+
+.fc-overlay.fc-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Header */
+.fc-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: move;
+    user-select: none;
+}
+
+.fc-title {
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.fc-controls {
+    display: flex;
+    gap: 4px;
+}
+
+/* Buttons */
+.fc-btn {
+    background: #3b82f6;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fc-btn:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+}
+
+.fc-btn-small {
+    padding: 4px 8px;
+    font-size: 12px;
+    min-width: 28px;
+    justify-content: center;
+}
+
+.fc-btn-primary {
+    background: #10b981;
+}
+
+.fc-btn-primary:hover {
+    background: #059669;
+}
+
+.fc-btn-secondary {
+    background: #6b7280;
+}
+
+.fc-btn-secondary:hover {
+    background: #4b5563;
+}
+
+.fc-btn-danger {
+    background: #ef4444;
+}
+
+.fc-btn-danger:hover {
+    background: #dc2626;
+}
+
+/* Content area */
+.fc-content {
+    padding: 16px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.fc-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.fc-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.fc-content::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+/* Tabs */
+.fc-tabs {
+    display: flex;
+    border-bottom: 2px solid #e5e7eb;
+    margin-bottom: 16px;
+}
+
+.fc-tab {
+    background: none;
+    border: none;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #6b7280;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+}
+
+.fc-tab-active {
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
+}
+
+/* Views */
+.fc-view {
+    display: none;
+}
+
+.fc-view-active {
+    display: block;
+}
+
+/* Queue view */
+.fc-queue-header {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.fc-screenshots {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.fc-screenshot-item {
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f9fafb;
+}
+
+.fc-screenshot-preview {
+    width: 80px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid #d1d5db;
+}
+
+.fc-screenshot-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.fc-screenshot-time {
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 8px;
+}
+
+/* Solutions view */
+.fc-solutions-header {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.fc-solution-content {
+    min-height: 200px;
+}
+
+.fc-solution-display {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.fc-solution-text {
+    line-height: 1.6;
+    color: #374151;
+}
+
+.fc-code-block {
+    background: #1f2937;
+    color: #f9fafb;
+    padding: 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 12px 0;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+}
+
+.fc-inline-code {
+    background: #e5e7eb;
+    color: #1f2937;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+}
+
+/* Placeholder */
+.fc-placeholder {
+    text-align: center;
+    color: #6b7280;
+    font-style: italic;
+    padding: 40px 20px;
+}
+
+/* Status bar */
+.fc-status {
+    background: #f3f4f6;
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #6b7280;
+    border-top: 1px solid #e5e7eb;
+}
+
+.fc-status.fc-processing {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.fc-status.fc-error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.fc-status.fc-success {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .fc-overlay {
+        width: 90vw;
+        max-width: 400px;
+        top: 20px;
+        right: 5vw;
+    }
+    
+    .fc-queue-header {
+        flex-direction: column;
+    }
+    
+    .fc-solutions-header {
+        flex-direction: column;
+    }
+}
+```
+
+## Security and Compliance
+
+### 1. AWS IAM Permissions
+
+Required IAM policy for the application:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "bedrock:InvokeModel"
+            ],
+            "Resource": [
+                "arn:aws:bedrock:*:*:model/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                "arn:aws:bedrock:*:*:model/anthropic.claude-3-haiku-20240307-v1:0",
+                "arn:aws:bedrock:*:*:model/anthropic.claude-3-opus-20240229-v1:0"
+            ]
+        }
+    ]
+}
+```
+
+### 2. Content Security Policy
+
+```html
+<meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' 'unsafe-inline';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data: blob:;
+    connect-src 'self' https://bedrock-runtime.*.amazonaws.com;
+    media-src 'self' blob:;
+">
+```
+
+### 3. Data Privacy and Compliance
+
+**Data Handling:**
+- Screenshots are processed locally and sent only to AWS Bedrock
+- No data is stored on external servers outside AWS
+- Images are not persisted after analysis
+- All data transmission uses HTTPS/TLS
+
+**Privacy Controls:**
+- Users control what content is captured
+- Screenshots can be deleted immediately
+- No automatic data collection
+- Clear data retention policies
+
+## Testing Strategy
+
+### 1. Unit Tests
+
+```typescript
+// tests/services/BedrockService.test.ts
+import { BedrockService } from '../../src/services/BedrockService';
+import { Screenshot } from '../../src/types';
+
+describe('BedrockService', () => {
+    let service: BedrockService;
+    
+    beforeEach(() => {
+        service = new BedrockService();
+    });
+
+    test('should analyze screenshots successfully', async () => {
+        const mockScreenshot: Screenshot = {
+            id: 'test-1',
+            timestamp: Date.now(),
+            data: 'base64-image-data',
+            preview: 'data:image/jpeg;base64,preview',
+            size: 1024,
+            dimensions: { width: 800, height: 600 }
+        };
+
+        const result = await service.analyzeScreenshots([mockScreenshot]);
+        
+        expect(result).toBeDefined();
+        expect(result.content).toBeTruthy();
+        expect(result.screenshotIds).toContain('test-1');
+    });
+});
+```
+
+### 2. Integration Tests
+
+```typescript
+// tests/integration/screenshot-flow.test.ts
+import { FreeCluely } from '../../src/main';
+
+describe('Screenshot Flow Integration', () => {
+    test('should capture and analyze screenshot', async () => {
+        const app = new FreeCluely();
+        await app.initialize();
+
+        // Mock screen capture
+        const mockScreenshot = await app.captureScreen();
+        expect(mockScreenshot).toBeDefined();
+
+        // Mock analysis
+        const analysis = await app.analyzeScreenshot(mockScreenshot);
+        expect(analysis.content).toBeTruthy();
+    });
+});
+```
+
+## Deployment and Distribution
+
+### 1. Build Process
+
+```bash
+#!/bin/bash
+# build.sh
+
+set -e
+
+echo "Building Free Cluely Web Application..."
+
+# Install dependencies
+npm ci
+
+# Run tests
+npm test
+
+# Lint code
+npm run lint
+
+# Build application
+npm run build
+
+# Create deployment package
+tar -czf free-cluely-web.tar.gz dist/
+
+echo "Build completed successfully!"
+```
+
+### 2. Amazon Internal Deployment
+
+**CloudFormation Template:**
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Free Cluely Web Application Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+
+Resources:
+  # S3 Bucket for hosting
+  WebAppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'free-cluely-web-${Environment}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # CloudFront Distribution
+  WebAppDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt WebAppBucket.DomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        Enabled: true
+        DefaultRootObject: index.html
+
+  # Cognito Identity Pool
+  IdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub 'FreeCluely${Environment}'
+      AllowUnauthenticatedIdentities: true
+
+  # IAM Role for unauthenticated users
+  UnauthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+      Policies:
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:model/anthropic.claude-3-5-sonnet-20241022-v2:0'
+
+Outputs:
+  WebAppURL:
+    Description: 'URL of the web application'
+    Value: !GetAtt WebAppDistribution.DomainName
+    
+  IdentityPoolId:
+    Description: 'Cognito Identity Pool ID'
+    Value: !Ref IdentityPool
+```
+
+### 3. Continuous Integration
+
+```yaml
+# .github/workflows/ci.yml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - run: npm ci
+      - run: npm run build
+      
+      - uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: dist/
+          
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+          path: dist/
+      
+      - name: Deploy to S3
+        run: |
+          aws s3 sync dist/ s3://free-cluely-web-prod --delete
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+```
+
+## Performance Optimization
+
+### 1. Code Splitting and Lazy Loading
+
+```typescript
+// Dynamic imports for large components
+export class LazyLoader {
+    public static async loadBedrockService(): Promise<any> {
+        const module = await import('./services/BedrockService');
+        return module.BedrockService;
+    }
+
+    public static async loadImageProcessor(): Promise<any> {
+        const module = await import('./utils/ImageProcessor');
+        return module.ImageProcessor;
+    }
+}
+```
+
+### 2. Memory Management
+
+```typescript
+export class MemoryManager {
+    private static readonly MAX_CACHE_SIZE = 50 * 1024 * 1024; // 50MB
+    private static cache = new Map<string, any>();
+    private static cacheSize = 0;
+
+    public static set(key: string, value: any): void {
+        const size = this.estimateSize(value);
+        
+        if (this.cacheSize + size > this.MAX_CACHE_SIZE) {
+            this.clearOldestEntries();
+        }
+        
+        this.cache.set(key, value);
+        this.cacheSize += size;
+    }
+
+    public static get(key: string): any {
+        return this.cache.get(key);
+    }
+
+    private static clearOldestEntries(): void {
+        const entries = Array.from(this.cache.entries());
+        const toRemove = entries.slice(0, Math.floor(entries.length / 2));
+        
+        toRemove.forEach(([key]) => {
+            this.cache.delete(key);
+        });
+        
+        this.cacheSize = Math.floor(this.cacheSize / 2);
+    }
+
+    private static estimateSize(obj: any): number {
+        return JSON.stringify(obj).length * 2; // Rough estimate
+    }
+}
+```
+
+## Monitoring and Observability
+
+### 1. Application Metrics
+
+```typescript
+export class MetricsCollector {
+    private static metrics = new Map<string, number>();
+
+    public static increment(metric: string, value: number = 1): void {
+        const current = this.metrics.get(metric) || 0;
+        this.metrics.set(metric, current + value);
+    }
+
+    public static timing(metric: string, duration: number): void {
+        this.metrics.set(`${metric}_duration`, duration);
+    }
+
+    public static getMetrics(): Record<string, number> {
+        return Object.fromEntries(this.metrics);
+    }
+
+    public static async sendMetrics(): Promise<void> {
+        const metrics = this.getMetrics();
+        
+        // Send to CloudWatch or internal monitoring system
+        console.log('Metrics:', metrics);
+        
+        // Reset metrics
+        this.metrics.clear();
+    }
+}
+```
+
+### 2. Error Tracking
+
+```typescript
+export class ErrorTracker {
+    public static trackError(error: Error, context?: any): void {
+        const errorData = {
+            message: error.message,
+            stack: error.stack,
+            timestamp: Date.now(),
+            context,
+            userAgent: navigator.userAgent,
+            url: window.location.href
+        };
+
+        // Send to error tracking service
+        this.sendErrorReport(errorData);
+    }
+
+    private static async sendErrorReport(errorData: any): Promise<void> {
+        try {
+            // Send to internal error tracking system
+            console.error('Error Report:', errorData);
+        } catch (reportingError) {
+            console.error('Failed to send error report:', reportingError);
+        }
+    }
+}
+```
+
+This comprehensive specification provides a complete blueprint for creating a TypeScript-only web application that uses Amazon Bedrock instead of Google Gemini, with minimal external dependencies and full compatibility with Amazon's internal build systems. The application maintains all the core functionality while being lightweight, secure, and enterprise-ready. 

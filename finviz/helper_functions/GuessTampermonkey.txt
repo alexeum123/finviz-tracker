@@ -1,0 +1,949 @@
+// ==UserScript==
+// @name         Free Cluely - AI-Powered Screenshot Analyzer
+// @namespace    http://tampermonkey.net/
+// @version      1.0.0
+// @description  AI-powered overlay system for coding interviews and problem-solving
+// @author       Free Cluely
+// @match        *://*/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Configuration
+    const CONFIG = {
+        AWS_ACCESS_KEY_ID: 'YOUR_AWS_ACCESS_KEY_ID_HERE', // Replace with your AWS Access Key ID
+        AWS_SECRET_ACCESS_KEY: 'YOUR_AWS_SECRET_ACCESS_KEY_HERE', // Replace with your AWS Secret Access Key
+        AWS_REGION: 'us-east-1', // Replace with your preferred AWS region
+        BEDROCK_MODEL_ID: 'anthropic.claude-3-5-sonnet-20241022-v2:0', // You can change this to other Bedrock models
+        MAX_SCREENSHOTS: 10,
+        SCREENSHOT_QUALITY: 0.8,
+        OVERLAY_Z_INDEX: 999999,
+        ANIMATION_DURATION: 300
+    };
+
+    // AWS Signature V4 helper
+    class AWSSignatureV4 {
+        constructor(accessKeyId, secretAccessKey, region, service) {
+            this.accessKeyId = accessKeyId;
+            this.secretAccessKey = secretAccessKey;
+            this.region = region;
+            this.service = service;
+        }
+
+        async sha256(message) {
+            const msgBuffer = new TextEncoder().encode(message);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            return Array.from(new Uint8Array(hashBuffer))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+        }
+
+        async hmac(key, message) {
+            const keyBuffer = typeof key === 'string' ? new TextEncoder().encode(key) : key;
+            const msgBuffer = new TextEncoder().encode(message);
+            const cryptoKey = await crypto.subtle.importKey(
+                'raw',
+                keyBuffer,
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+            );
+            const signature = await crypto.subtle.sign('HMAC', cryptoKey, msgBuffer);
+            return new Uint8Array(signature);
+        }
+
+        async sign(request, payload) {
+            const now = new Date();
+            const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
+            const dateStamp = amzDate.substr(0, 8);
+            
+            const host = `bedrock-runtime.${this.region}.amazonaws.com`;
+            const canonicalUri = '/model/' + encodeURIComponent(CONFIG.BEDROCK_MODEL_ID) + '/invoke';
+            
+            // Create canonical request
+            const canonicalHeaders = [
+                `host:${host}`,
+                `x-amz-date:${amzDate}`,
+                `x-amz-target:BedrockRuntime.InvokeModel`
+            ].join('\n') + '\n';
+            
+            const signedHeaders = 'host;x-amz-date;x-amz-target';
+            const payloadHash = await this.sha256(payload);
+            
+            const canonicalRequest = [
+                'POST',
+                canonicalUri,
+                '', // query string
+                canonicalHeaders,
+                signedHeaders,
+                payloadHash
+            ].join('\n');
+            
+            // Create string to sign
+            const algorithm = 'AWS4-HMAC-SHA256';
+            const credentialScope = `${dateStamp}/${this.region}/${this.service}/aws4_request`;
+            const stringToSign = [
+                algorithm,
+                amzDate,
+                credentialScope,
+                await this.sha256(canonicalRequest)
+            ].join('\n');
+            
+            // Calculate signature
+            const kDate = await this.hmac(`AWS4${this.secretAccessKey}`, dateStamp);
+            const kRegion = await this.hmac(kDate, this.region);
+            const kService = await this.hmac(kRegion, this.service);
+            const kSigning = await this.hmac(kService, 'aws4_request');
+            const signature = await this.hmac(kSigning, stringToSign);
+            
+            const signatureHex = Array.from(signature)
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+            
+            const authorizationHeader = `${algorithm} Credential=${this.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signatureHex}`;
+            
+            return {
+                url: `https://${host}${canonicalUri}`,
+                headers: {
+                    'Authorization': authorizationHeader,
+                    'X-Amz-Date': amzDate,
+                    'X-Amz-Target': 'BedrockRuntime.InvokeModel',
+                    'Content-Type': 'application/json'
+                }
+            };
+        }
+    }
+
+    // Application State
+    class AppState {
+        constructor() {
+            this.isVisible = false;
+            this.currentView = 'queue'; // 'queue' or 'solutions'
+            this.screenshots = [];
+            this.currentSolution = '';
+            this.isProcessing = false;
+            this.position = { x: 50, y: 50 };
+            this.isInitialized = false;
+        }
+
+        addScreenshot(screenshot) {
+            this.screenshots.unshift(screenshot);
+            if (this.screenshots.length > CONFIG.MAX_SCREENSHOTS) {
+                this.screenshots = this.screenshots.slice(0, CONFIG.MAX_SCREENSHOTS);
+            }
+        }
+
+        removeScreenshot(id) {
+            this.screenshots = this.screenshots.filter(s => s.id !== id);
+        }
+
+        clearScreenshots() {
+            this.screenshots = [];
+        }
+
+        setView(view) {
+            this.currentView = view;
+        }
+
+        setSolution(solution) {
+            this.currentSolution = solution;
+        }
+
+        setProcessing(processing) {
+            this.isProcessing = processing;
+        }
+
+        toggleVisibility() {
+            this.isVisible = !this.isVisible;
+        }
+
+        setPosition(x, y) {
+            this.position = { x, y };
+        }
+    }
+
+    // Screenshot Capture Service
+    class ScreenshotService {
+        constructor() {
+            this.mediaStream = null;
+        }
+
+        async captureScreen() {
+            try {
+                // Request screen capture permission
+                const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: {
+                        mediaSource: 'screen',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                });
+
+                // Create video element to capture frame
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.style.display = 'none';
+                document.body.appendChild(video);
+
+                return new Promise((resolve, reject) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        
+                        // Create canvas to capture frame
+                        const canvas = document.createElement('canvas');
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(video, 0, 0);
+                        
+                        // Convert to blob
+                        canvas.toBlob((blob) => {
+                            // Stop stream and cleanup
+                            stream.getTracks().forEach(track => track.stop());
+                            document.body.removeChild(video);
+                            
+                            // Convert blob to base64
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                const base64 = reader.result.split(',')[1];
+                                const screenshot = {
+                                    id: Date.now().toString(),
+                                    timestamp: new Date().toISOString(),
+                                    data: base64,
+                                    preview: reader.result
+                                };
+                                resolve(screenshot);
+                            };
+                            reader.readAsDataURL(blob);
+                        }, 'image/jpeg', CONFIG.SCREENSHOT_QUALITY);
+                    };
+                    
+                    video.onerror = reject;
+                });
+            } catch (error) {
+                console.error('Screenshot capture failed:', error);
+                throw error;
+            }
+        }
+    }
+
+    // AI Analysis Service using Amazon Bedrock
+    class AIService {
+        constructor() {
+            this.accessKeyId = CONFIG.AWS_ACCESS_KEY_ID;
+            this.secretAccessKey = CONFIG.AWS_SECRET_ACCESS_KEY;
+            this.region = CONFIG.AWS_REGION;
+            this.modelId = CONFIG.BEDROCK_MODEL_ID;
+            this.signer = new AWSSignatureV4(this.accessKeyId, this.secretAccessKey, this.region, 'bedrock');
+        }
+
+        async analyzeScreenshot(screenshot) {
+            if (!this.accessKeyId || this.accessKeyId === 'YOUR_AWS_ACCESS_KEY_ID_HERE' ||
+                !this.secretAccessKey || this.secretAccessKey === 'YOUR_AWS_SECRET_ACCESS_KEY_HERE') {
+                throw new Error('Please configure your AWS credentials in the script');
+            }
+
+            const systemPrompt = `You are an expert software engineer and competitive programmer. 
+Analyze this screenshot and provide a comprehensive solution.
+
+If you see a coding problem:
+1. Extract the problem statement
+2. Identify input/output format
+3. Note any constraints
+4. Provide a complete working solution with explanation
+5. Include time/space complexity analysis
+
+If you see code with errors:
+1. Identify the bugs
+2. Explain why they're problematic
+3. Provide corrected code
+4. Suggest improvements
+
+If you see technical content:
+1. Summarize the key points
+2. Provide relevant explanations
+3. Suggest next steps or solutions
+
+Format your response clearly with proper sections and code blocks.`;
+
+            const requestBody = {
+                anthropic_version: "bedrock-2023-05-31",
+                max_tokens: 4000,
+                system: systemPrompt,
+                messages: [{
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Please analyze this screenshot and provide a comprehensive solution."
+                        },
+                        {
+                            type: "image",
+                            source: {
+                                type: "base64",
+                                media_type: "image/jpeg",
+                                data: screenshot.data
+                            }
+                        }
+                    ]
+                }]
+            };
+
+            const payload = JSON.stringify(requestBody);
+
+            try {
+                const signedRequest = await this.signer.sign({}, payload);
+                
+                const response = await fetch(signedRequest.url, {
+                    method: 'POST',
+                    headers: signedRequest.headers,
+                    body: payload
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Bedrock API request failed: ${response.status} - ${errorText}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.content && data.content[0] && data.content[0].text) {
+                    return data.content[0].text;
+                } else {
+                    throw new Error('Invalid response format from Bedrock service');
+                }
+            } catch (error) {
+                console.error('AI analysis failed:', error);
+                throw error;
+            }
+        }
+    }
+
+    // UI Components
+    class UIComponents {
+        static createOverlay() {
+            const overlay = document.createElement('div');
+            overlay.id = 'free-cluely-overlay';
+            overlay.innerHTML = `
+                <div class="fc-header">
+                    <div class="fc-title">Free Cluely</div>
+                    <div class="fc-controls">
+                        <button class="fc-btn fc-btn-small" id="fc-move-btn">⋮⋮</button>
+                        <button class="fc-btn fc-btn-small" id="fc-minimize-btn">−</button>
+                        <button class="fc-btn fc-btn-small" id="fc-close-btn">×</button>
+                    </div>
+                </div>
+                <div class="fc-content">
+                    <div class="fc-tabs">
+                        <button class="fc-tab fc-tab-active" data-view="queue">Queue</button>
+                        <button class="fc-tab" data-view="solutions">Solutions</button>
+                    </div>
+                    <div class="fc-view" id="fc-queue-view">
+                        <div class="fc-queue-header">
+                            <button class="fc-btn fc-btn-primary" id="fc-capture-btn">📷 Capture Screen</button>
+                            <button class="fc-btn fc-btn-secondary" id="fc-clear-btn">🗑️ Clear All</button>
+                        </div>
+                        <div class="fc-screenshots" id="fc-screenshots"></div>
+                    </div>
+                    <div class="fc-view fc-view-hidden" id="fc-solutions-view">
+                        <div class="fc-solutions-header">
+                            <button class="fc-btn fc-btn-primary" id="fc-analyze-btn">🤖 Analyze Screenshots</button>
+                            <button class="fc-btn fc-btn-secondary" id="fc-back-btn">← Back to Queue</button>
+                        </div>
+                        <div class="fc-solution-content" id="fc-solution-content">
+                            <div class="fc-placeholder">Take screenshots and click "Analyze" to get AI-powered solutions</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="fc-status" id="fc-status"></div>
+            `;
+            
+            return overlay;
+        }
+
+        static createScreenshotItem(screenshot) {
+            const item = document.createElement('div');
+            item.className = 'fc-screenshot-item';
+            item.innerHTML = `
+                <img src="${screenshot.preview}" alt="Screenshot" class="fc-screenshot-preview">
+                <div class="fc-screenshot-info">
+                    <div class="fc-screenshot-time">${new Date(screenshot.timestamp).toLocaleTimeString()}</div>
+                    <button class="fc-btn fc-btn-danger fc-btn-small" onclick="app.removeScreenshot('${screenshot.id}')">Delete</button>
+                </div>
+            `;
+            return item;
+        }
+
+        static createSolutionDisplay(solution) {
+            const container = document.createElement('div');
+            container.className = 'fc-solution-display';
+            
+            // Format the solution text with basic markdown-like formatting
+            const formattedSolution = solution
+                .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="fc-code-block"><code>$2</code></pre>')
+                .replace(/`([^`]+)`/g, '<code class="fc-inline-code">$1</code>')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/\n/g, '<br>');
+            
+            container.innerHTML = `<div class="fc-solution-text"><p>${formattedSolution}</p></div>`;
+            return container;
+        }
+    }
+
+    // Main Application Class
+    class FreeCluely {
+        constructor() {
+            this.state = new AppState();
+            this.screenshotService = new ScreenshotService();
+            this.aiService = new AIService();
+            this.overlay = null;
+            this.isDragging = false;
+            this.dragOffset = { x: 0, y: 0 };
+        }
+
+        async init() {
+            if (this.state.isInitialized) return;
+            
+            this.injectStyles();
+            this.createOverlay();
+            this.setupEventListeners();
+            this.setupKeyboardShortcuts();
+            this.state.isInitialized = true;
+            
+            console.log('Free Cluely initialized');
+        }
+
+        injectStyles() {
+            const style = document.createElement('style');
+            style.textContent = `
+                #free-cluely-overlay {
+                    position: fixed;
+                    top: 50px;
+                    right: 50px;
+                    width: 400px;
+                    max-height: 600px;
+                    background: #ffffff;
+                    border: 2px solid #e2e8f0;
+                    border-radius: 12px;
+                    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+                    z-index: ${CONFIG.OVERLAY_Z_INDEX};
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                    font-size: 14px;
+                    display: none;
+                    overflow: hidden;
+                }
+
+                #free-cluely-overlay.fc-visible {
+                    display: block;
+                    animation: fcFadeIn ${CONFIG.ANIMATION_DURATION}ms ease-out;
+                }
+
+                @keyframes fcFadeIn {
+                    from { opacity: 0; transform: translateY(-10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+
+                .fc-header {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 12px 16px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    cursor: move;
+                    user-select: none;
+                }
+
+                .fc-title {
+                    font-weight: 600;
+                    font-size: 16px;
+                }
+
+                .fc-controls {
+                    display: flex;
+                    gap: 4px;
+                }
+
+                .fc-btn {
+                    background: #3b82f6;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    font-weight: 500;
+                    transition: all 0.2s;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+
+                .fc-btn:hover {
+                    background: #2563eb;
+                    transform: translateY(-1px);
+                }
+
+                .fc-btn-small {
+                    padding: 4px 8px;
+                    font-size: 12px;
+                    min-width: 28px;
+                    justify-content: center;
+                }
+
+                .fc-btn-primary {
+                    background: #10b981;
+                }
+
+                .fc-btn-primary:hover {
+                    background: #059669;
+                }
+
+                .fc-btn-secondary {
+                    background: #6b7280;
+                }
+
+                .fc-btn-secondary:hover {
+                    background: #4b5563;
+                }
+
+                .fc-btn-danger {
+                    background: #ef4444;
+                }
+
+                .fc-btn-danger:hover {
+                    background: #dc2626;
+                }
+
+                .fc-content {
+                    padding: 16px;
+                    max-height: 500px;
+                    overflow-y: auto;
+                }
+
+                .fc-tabs {
+                    display: flex;
+                    border-bottom: 2px solid #e5e7eb;
+                    margin-bottom: 16px;
+                }
+
+                .fc-tab {
+                    background: none;
+                    border: none;
+                    padding: 8px 16px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    color: #6b7280;
+                    border-bottom: 2px solid transparent;
+                    transition: all 0.2s;
+                }
+
+                .fc-tab-active {
+                    color: #3b82f6;
+                    border-bottom-color: #3b82f6;
+                }
+
+                .fc-view {
+                    display: block;
+                }
+
+                .fc-view-hidden {
+                    display: none;
+                }
+
+                .fc-queue-header {
+                    display: flex;
+                    gap: 8px;
+                    margin-bottom: 16px;
+                }
+
+                .fc-screenshots {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                }
+
+                .fc-screenshot-item {
+                    display: flex;
+                    gap: 12px;
+                    padding: 12px;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 8px;
+                    background: #f9fafb;
+                }
+
+                .fc-screenshot-preview {
+                    width: 80px;
+                    height: 60px;
+                    object-fit: cover;
+                    border-radius: 4px;
+                    border: 1px solid #d1d5db;
+                }
+
+                .fc-screenshot-info {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: space-between;
+                }
+
+                .fc-screenshot-time {
+                    font-size: 12px;
+                    color: #6b7280;
+                    margin-bottom: 8px;
+                }
+
+                .fc-solutions-header {
+                    display: flex;
+                    gap: 8px;
+                    margin-bottom: 16px;
+                }
+
+                .fc-solution-content {
+                    min-height: 200px;
+                }
+
+                .fc-placeholder {
+                    text-align: center;
+                    color: #6b7280;
+                    font-style: italic;
+                    padding: 40px 20px;
+                }
+
+                .fc-solution-display {
+                    background: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 16px;
+                }
+
+                .fc-solution-text {
+                    line-height: 1.6;
+                    color: #374151;
+                }
+
+                .fc-code-block {
+                    background: #1f2937;
+                    color: #f9fafb;
+                    padding: 16px;
+                    border-radius: 6px;
+                    overflow-x: auto;
+                    margin: 12px 0;
+                    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                    font-size: 13px;
+                }
+
+                .fc-inline-code {
+                    background: #e5e7eb;
+                    color: #1f2937;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                    font-size: 13px;
+                }
+
+                .fc-status {
+                    background: #f3f4f6;
+                    padding: 8px 16px;
+                    font-size: 12px;
+                    color: #6b7280;
+                    border-top: 1px solid #e5e7eb;
+                }
+
+                .fc-status.fc-processing {
+                    background: #fef3c7;
+                    color: #92400e;
+                }
+
+                .fc-status.fc-error {
+                    background: #fee2e2;
+                    color: #991b1b;
+                }
+
+                .fc-status.fc-success {
+                    background: #d1fae5;
+                    color: #065f46;
+                }
+
+                /* Scrollbar styling */
+                .fc-content::-webkit-scrollbar {
+                    width: 6px;
+                }
+
+                .fc-content::-webkit-scrollbar-track {
+                    background: #f1f1f1;
+                }
+
+                .fc-content::-webkit-scrollbar-thumb {
+                    background: #c1c1c1;
+                    border-radius: 3px;
+                }
+
+                .fc-content::-webkit-scrollbar-thumb:hover {
+                    background: #a8a8a8;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        createOverlay() {
+            this.overlay = UIComponents.createOverlay();
+            document.body.appendChild(this.overlay);
+        }
+
+        setupEventListeners() {
+            // Tab switching
+            document.querySelectorAll('.fc-tab').forEach(tab => {
+                tab.addEventListener('click', (e) => {
+                    const view = e.target.dataset.view;
+                    this.switchView(view);
+                });
+            });
+
+            // Button events
+            document.getElementById('fc-capture-btn').addEventListener('click', () => this.captureScreen());
+            document.getElementById('fc-clear-btn').addEventListener('click', () => this.clearScreenshots());
+            document.getElementById('fc-analyze-btn').addEventListener('click', () => this.analyzeScreenshots());
+            document.getElementById('fc-back-btn').addEventListener('click', () => this.switchView('queue'));
+            document.getElementById('fc-close-btn').addEventListener('click', () => this.toggleVisibility());
+            document.getElementById('fc-minimize-btn').addEventListener('click', () => this.toggleVisibility());
+
+            // Dragging functionality
+            const header = document.querySelector('.fc-header');
+            header.addEventListener('mousedown', (e) => this.startDrag(e));
+            document.addEventListener('mousemove', (e) => this.drag(e));
+            document.addEventListener('mouseup', () => this.endDrag());
+        }
+
+        setupKeyboardShortcuts() {
+            document.addEventListener('keydown', (e) => {
+                // Ctrl/Cmd + B: Toggle visibility
+                if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+                    e.preventDefault();
+                    this.toggleVisibility();
+                }
+                
+                // Ctrl/Cmd + H: Take screenshot
+                if ((e.ctrlKey || e.metaKey) && e.key === 'h') {
+                    e.preventDefault();
+                    this.captureScreen();
+                }
+                
+                // Ctrl/Cmd + Enter: Analyze screenshots
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    this.analyzeScreenshots();
+                }
+                
+                // Escape: Hide overlay
+                if (e.key === 'Escape' && this.state.isVisible) {
+                    e.preventDefault();
+                    this.toggleVisibility();
+                }
+            });
+        }
+
+        toggleVisibility() {
+            this.state.toggleVisibility();
+            if (this.state.isVisible) {
+                this.overlay.classList.add('fc-visible');
+            } else {
+                this.overlay.classList.remove('fc-visible');
+            }
+        }
+
+        switchView(view) {
+            this.state.setView(view);
+            
+            // Update tabs
+            document.querySelectorAll('.fc-tab').forEach(tab => {
+                tab.classList.remove('fc-tab-active');
+            });
+            document.querySelector(`[data-view="${view}"]`).classList.add('fc-tab-active');
+            
+            // Update views
+            document.querySelectorAll('.fc-view').forEach(viewEl => {
+                viewEl.classList.add('fc-view-hidden');
+            });
+            document.getElementById(`fc-${view}-view`).classList.remove('fc-view-hidden');
+        }
+
+        async captureScreen() {
+            try {
+                this.showStatus('Capturing screen...', 'processing');
+                
+                // Hide overlay temporarily
+                const wasVisible = this.state.isVisible;
+                if (wasVisible) {
+                    this.overlay.style.display = 'none';
+                }
+                
+                // Small delay to ensure overlay is hidden
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                const screenshot = await this.screenshotService.captureScreen();
+                this.state.addScreenshot(screenshot);
+                
+                // Show overlay again if it was visible
+                if (wasVisible) {
+                    this.overlay.style.display = 'block';
+                }
+                
+                this.renderScreenshots();
+                this.showStatus(`Screenshot captured! Total: ${this.state.screenshots.length}`, 'success');
+                
+            } catch (error) {
+                this.showStatus('Failed to capture screen. Please grant permission.', 'error');
+                console.error('Screenshot capture failed:', error);
+            }
+        }
+
+        renderScreenshots() {
+            const container = document.getElementById('fc-screenshots');
+            container.innerHTML = '';
+            
+            if (this.state.screenshots.length === 0) {
+                container.innerHTML = '<div class="fc-placeholder">No screenshots yet. Click "Capture Screen" to get started!</div>';
+                return;
+            }
+            
+            this.state.screenshots.forEach(screenshot => {
+                const item = UIComponents.createScreenshotItem(screenshot);
+                container.appendChild(item);
+            });
+        }
+
+        removeScreenshot(id) {
+            this.state.removeScreenshot(id);
+            this.renderScreenshots();
+            this.showStatus('Screenshot removed', 'success');
+        }
+
+        clearScreenshots() {
+            this.state.clearScreenshots();
+            this.renderScreenshots();
+            this.showStatus('All screenshots cleared', 'success');
+        }
+
+        async analyzeScreenshots() {
+            if (this.state.screenshots.length === 0) {
+                this.showStatus('No screenshots to analyze', 'error');
+                return;
+            }
+
+            try {
+                this.state.setProcessing(true);
+                this.showStatus('Analyzing screenshots with AI...', 'processing');
+                
+                // Analyze the most recent screenshot
+                const latestScreenshot = this.state.screenshots[0];
+                const solution = await this.aiService.analyzeScreenshot(latestScreenshot);
+                
+                this.state.setSolution(solution);
+                this.state.setProcessing(false);
+                
+                this.switchView('solutions');
+                this.renderSolution();
+                this.showStatus('Analysis complete!', 'success');
+                
+            } catch (error) {
+                this.state.setProcessing(false);
+                this.showStatus('Analysis failed: ' + error.message, 'error');
+                console.error('Analysis failed:', error);
+            }
+        }
+
+        renderSolution() {
+            const container = document.getElementById('fc-solution-content');
+            
+            if (!this.state.currentSolution) {
+                container.innerHTML = '<div class="fc-placeholder">No solution available</div>';
+                return;
+            }
+            
+            const solutionDisplay = UIComponents.createSolutionDisplay(this.state.currentSolution);
+            container.innerHTML = '';
+            container.appendChild(solutionDisplay);
+        }
+
+        showStatus(message, type = 'info') {
+            const status = document.getElementById('fc-status');
+            status.textContent = message;
+            status.className = `fc-status fc-${type}`;
+            
+            // Auto-hide success messages
+            if (type === 'success') {
+                setTimeout(() => {
+                    status.textContent = 'Ready';
+                    status.className = 'fc-status';
+                }, 3000);
+            }
+        }
+
+        // Dragging functionality
+        startDrag(e) {
+            this.isDragging = true;
+            const rect = this.overlay.getBoundingClientRect();
+            this.dragOffset = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+            document.body.style.userSelect = 'none';
+        }
+
+        drag(e) {
+            if (!this.isDragging) return;
+            
+            const x = e.clientX - this.dragOffset.x;
+            const y = e.clientY - this.dragOffset.y;
+            
+            // Keep overlay within viewport
+            const maxX = window.innerWidth - this.overlay.offsetWidth;
+            const maxY = window.innerHeight - this.overlay.offsetHeight;
+            
+            const boundedX = Math.max(0, Math.min(x, maxX));
+            const boundedY = Math.max(0, Math.min(y, maxY));
+            
+            this.overlay.style.left = boundedX + 'px';
+            this.overlay.style.top = boundedY + 'px';
+            this.overlay.style.right = 'auto';
+            
+            this.state.setPosition(boundedX, boundedY);
+        }
+
+        endDrag() {
+            this.isDragging = false;
+            document.body.style.userSelect = '';
+        }
+    }
+
+    // Initialize the application
+    const app = new FreeCluely();
+    
+    // Make app globally available for button callbacks
+    window.app = app;
+    
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => app.init());
+    } else {
+        app.init();
+    }
+
+    // Show welcome message
+    setTimeout(() => {
+        if (CONFIG.AWS_ACCESS_KEY_ID === 'YOUR_AWS_ACCESS_KEY_ID_HERE' || CONFIG.AWS_SECRET_ACCESS_KEY === 'YOUR_AWS_SECRET_ACCESS_KEY_HERE') {
+            console.warn('Free Cluely: Please configure your AWS credentials in the script');
+        } else {
+            console.log('Free Cluely: Ready! Press Ctrl+B to toggle overlay');
+        }
+    }, 1000);
+
+})(); 
